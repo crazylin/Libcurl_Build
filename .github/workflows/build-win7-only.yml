@@ -27,7 +27,7 @@ env:
 jobs:
   build-windows-win7:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       # Run sequentially to avoid resource conflicts
       max-parallel: 1
@@ -134,6 +134,25 @@ jobs:
             no-md2 \
             no-md4 \
             no-ripemd \
+            no-camellia \
+            no-seed \
+            no-whirlpool \
+            no-gost \
+            no-srp \
+            no-dsa \
+            no-dh \
+            no-ecdh \
+            no-ecdsa \
+            no-ec \
+            no-cms \
+            no-ocsp \
+            no-ts \
+            no-sctp \
+            no-psk \
+            no-heartbeats \
+            no-srtp \
+            no-ct \
+            no-autoerrinit \
             -static \
             -Os \
             -DWIN32_LEAN_AND_MEAN \
@@ -162,15 +181,38 @@ jobs:
             no-md2 \
             no-md4 \
             no-ripemd \
+            no-camellia \
+            no-seed \
+            no-whirlpool \
+            no-gost \
+            no-srp \
+            no-dsa \
+            no-dh \
+            no-ecdh \
+            no-ecdsa \
+            no-ec \
+            no-cms \
+            no-ocsp \
+            no-ts \
+            no-sctp \
+            no-psk \
+            no-heartbeats \
+            no-srtp \
+            no-ct \
+            no-autoerrinit \
             -static \
             -Os \
             -DWIN32_LEAN_AND_MEAN \
             -D_WIN32_WINNT=0x0601
         fi
         
-        # Use maximum threads for faster compilation
-        make -j$(nproc) build_libs
+        # Use limited parallelization to avoid memory issues
+        make -j2 build_libs
         make install_dev
+        
+        # Clean up build artifacts to save disk space
+        cd ..
+        rm -rf openssl-src
     
     - name: Download and extract zlib
       shell: msys2 {0}
@@ -269,6 +311,10 @@ jobs:
         echo "=== zlib build completed ==="
         ls -la "${INSTALL_PREFIX}/lib/libz.a"
         ls -la "${INSTALL_PREFIX}/include/zlib.h"
+        
+        # Clean up build artifacts
+        cd ..
+        rm -rf zlib-src
     
     - name: Download and extract nghttp2
       shell: msys2 {0}
@@ -323,8 +369,12 @@ jobs:
             --disable-app \
             CPPFLAGS="-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601"
         fi
-        make -j$(nproc)
+        make -j2
         make install
+        
+        # Clean up build artifacts
+        cd ..
+        rm -rf nghttp2-src
     
     - name: Download and extract libcurl
       shell: msys2 {0}
@@ -458,10 +508,14 @@ jobs:
             ZLIB_LIBS="${INSTALL_PREFIX}/lib/libz.a"
         fi
         # Only build the library, not the curl command-line tool to avoid Makefile issues
-        make -j$(nproc) -C lib
+        make -j2 -C lib
         # Install library and headers
         make -C lib install
         make -C include install
+        
+        # Clean up build artifacts
+        cd ..
+        rm -rf curl-src
     
     - name: Test static libcurl
       if: matrix.arch == 'x64'
