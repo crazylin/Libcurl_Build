@@ -1,4 +1,4 @@
-name: Build libcurl for Windows 7
+name: Build libcurl for Windows 7 (Max Threads)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ env:
 jobs:
   build-windows-win7:
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       # Run sequentially to avoid resource conflicts
       max-parallel: 1
@@ -122,7 +122,20 @@ jobs:
             no-engine \
             no-dso \
             no-asm \
+            no-threads \
+            no-zlib \
+            no-comp \
+            no-idea \
+            no-mdc2 \
+            no-rc5 \
+            no-bf \
+            no-cast \
+            no-des \
+            no-md2 \
+            no-md4 \
+            no-ripemd \
             -static \
+            -Os \
             -DWIN32_LEAN_AND_MEAN \
             -D_WIN32_WINNT=0x0601
         else
@@ -137,14 +150,27 @@ jobs:
             no-engine \
             no-dso \
             no-asm \
+            no-threads \
+            no-zlib \
+            no-comp \
+            no-idea \
+            no-mdc2 \
+            no-rc5 \
+            no-bf \
+            no-cast \
+            no-des \
+            no-md2 \
+            no-md4 \
+            no-ripemd \
             -static \
+            -Os \
             -DWIN32_LEAN_AND_MEAN \
             -D_WIN32_WINNT=0x0601
         fi
         
-        # Use limited parallelism to avoid timeout
-        make -j2
-        make install_sw
+        # Use maximum threads for faster compilation
+        make -j$(nproc) build_libs
+        make install_dev
     
     - name: Download and extract zlib
       shell: msys2 {0}
@@ -185,46 +211,64 @@ jobs:
         # Convert Windows paths to MSYS2 format  
         INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
         
-        # Method 1: Try traditional Makefile approach first
+        # Check available tools
+        echo "=== Checking MinGW tools ==="
         if [ "${{ matrix.arch }}" = "x64" ]; then
-          # Check if windres is available
-          if command -v x86_64-w64-mingw32-windres > /dev/null 2>&1; then
-            echo "Using windres-enabled build"
-            make -j2 -f win32/Makefile.gcc \
-              BINARY_PATH="${INSTALL_PREFIX}/bin" \
-              INCLUDE_PATH="${INSTALL_PREFIX}/include" \
-              LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
-              SHARED_MODE=0 \
-              PREFIX=x86_64-w64-mingw32- \
-              install
-          else
-            echo "windres not found, using alternative build method"
-            # Method 2: Use configure-based build
-            CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar \
-            ./configure --prefix="${INSTALL_PREFIX}" --static
-            make -j2
-            make install
-          fi
+          CROSS_PREFIX="x86_64-w64-mingw32-"
         else
-          # Check if windres is available for i686
-          if command -v i686-w64-mingw32-windres > /dev/null 2>&1; then
-            echo "Using windres-enabled build"
-            make -j2 -f win32/Makefile.gcc \
-              BINARY_PATH="${INSTALL_PREFIX}/bin" \
-              INCLUDE_PATH="${INSTALL_PREFIX}/include" \
-              LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
-              SHARED_MODE=0 \
-              PREFIX=i686-w64-mingw32- \
-              install
-          else
-            echo "windres not found, using alternative build method"
-            # Method 2: Use configure-based build
-            CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar \
-            ./configure --prefix="${INSTALL_PREFIX}" --static
-            make -j2
-            make install
-          fi
+          CROSS_PREFIX="i686-w64-mingw32-"
         fi
+        
+        echo "Looking for: ${CROSS_PREFIX}gcc, ${CROSS_PREFIX}ar, ${CROSS_PREFIX}windres"
+        
+        # Try to find the actual tool names
+        GCC_CMD=$(which ${CROSS_PREFIX}gcc 2>/dev/null || which gcc 2>/dev/null || echo "")
+        AR_CMD=$(which ${CROSS_PREFIX}ar 2>/dev/null || which ar 2>/dev/null || echo "")
+        
+        if [ -z "$GCC_CMD" ] || [ -z "$AR_CMD" ]; then
+          echo "Cross-compilation tools not found, trying MSYS2 native tools"
+          GCC_CMD="gcc"
+          AR_CMD="ar"
+        fi
+        
+        echo "Using GCC: $GCC_CMD"
+        echo "Using AR: $AR_CMD"
+        
+        # Use direct compilation instead of configure
+        echo "=== Building zlib manually ==="
+        
+        # Compile all source files
+        $GCC_CMD -O3 -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 -c \
+          adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c \
+          gzread.c gzwrite.c infback.c inffast.c inflate.c inftrees.c \
+          trees.c uncompr.c zutil.c
+        
+        # Create static library
+        $AR_CMD rcs libz.a *.o
+        
+        # Install manually
+        mkdir -p "${INSTALL_PREFIX}"/{include,lib,bin}
+        cp zlib.h zconf.h "${INSTALL_PREFIX}/include/"
+        cp libz.a "${INSTALL_PREFIX}/lib/"
+        
+        # Create pkg-config file
+        mkdir -p "${INSTALL_PREFIX}/lib/pkgconfig"
+        cat > "${INSTALL_PREFIX}/lib/pkgconfig/zlib.pc" << EOF
+        prefix=${INSTALL_PREFIX}
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
+        
+        Name: zlib
+        Description: zlib compression library
+        Version: ${ZLIB_VERSION}
+        Libs: -L\${libdir} -lz
+        Cflags: -I\${includedir}
+        EOF
+        
+        echo "=== zlib build completed ==="
+        ls -la "${INSTALL_PREFIX}/lib/libz.a"
+        ls -la "${INSTALL_PREFIX}/include/zlib.h"
     
     - name: Download and extract nghttp2
       shell: msys2 {0}
@@ -279,7 +323,7 @@ jobs:
             --disable-app \
             CPPFLAGS="-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601"
         fi
-        make -j2
+        make -j$(nproc)
         make install
     
     - name: Download and extract libcurl
@@ -386,7 +430,7 @@ jobs:
             --without-librtmp \
             --with-ca-bundle=curl-ca-bundle.crt
         fi
-        make -j2
+        make -j$(nproc)
         make install
     
     - name: Test static libcurl
