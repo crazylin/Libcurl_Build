@@ -1,4 +1,4 @@
-name: Build libcurl for Windows 7 (Fixed Nonblock)
+name: Build libcurl for Windows 7 (Standalone DLL)
 
 on:
   workflow_dispatch:
@@ -362,16 +362,16 @@ jobs:
         INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
         
         export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH"
-        export LDFLAGS="-L${INSTALL_PREFIX}/lib -static-libgcc -static-libstdc++ $LDFLAGS"
-        export CPPFLAGS="-I${INSTALL_PREFIX}/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 -DHAVE_STRUCT_SOCKADDR_STORAGE -DHAVE_IOCTLSOCKET -DHAVE_IOCTLSOCKET_FIONBIO $CPPFLAGS"
+        export LDFLAGS="-L${INSTALL_PREFIX}/lib -static-libgcc -static-libstdc++ -Wl,-Bstatic -lssl -lcrypto -lnghttp2 -lz -Wl,-Bdynamic -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion $LDFLAGS"
+        export CPPFLAGS="-I${INSTALL_PREFIX}/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 -DHAVE_STRUCT_SOCKADDR_STORAGE -DHAVE_IOCTLSOCKET -DHAVE_IOCTLSOCKET_FIONBIO -DCURL_STATICLIB $CPPFLAGS"
         
         if [ "${{ matrix.arch }}" = "x64" ]; then
           ./configure \
             --host=x86_64-w64-mingw32 \
             --build=x86_64-w64-mingw32 \
             --prefix="${INSTALL_PREFIX}" \
-            --enable-static \
-            --disable-shared \
+            --enable-shared \
+            --disable-static \
             --with-openssl \
             --with-nghttp2 \
             --with-zlib \
@@ -405,8 +405,8 @@ jobs:
             --host=i686-w64-mingw32 \
             --build=i686-w64-mingw32 \
             --prefix="${INSTALL_PREFIX}" \
-            --enable-static \
-            --disable-shared \
+            --enable-shared \
+            --disable-static \
             --with-openssl \
             --with-nghttp2 \
             --with-zlib \
@@ -436,8 +436,11 @@ jobs:
             --enable-nonblocking \
             --with-winidn
         fi
-        make -j$(nproc)
-        make install
+        # Only build the library, not the curl command-line tool to avoid Makefile issues
+        make -j$(nproc) -C lib
+        # Install library and headers
+        make -C lib install
+        make -C include install
     
     - name: Test static libcurl
       if: matrix.arch == 'x64'
@@ -509,12 +512,12 @@ jobs:
         
         # Add comprehensive README for Win7 usage
         cat > libcurl-win7-${{ matrix.arch }}/README-Win7.txt << 'EOF'
-        # libcurl Static Build for Windows 7 Compatibility
+        # libcurl Standalone DLL for Windows 7 Compatibility
         
         This build is specifically compiled for Windows 7+ compatibility using MinGW-w64.
         
         ## Features
-        - Static linking (no DLL dependencies)
+        - Standalone DLL (all dependencies statically embedded)
         - OpenSSL with TLS 1.3 support  
         - HTTP/2 support via nghttp2
         - zlib compression support
@@ -522,30 +525,29 @@ jobs:
         
         ## Files Included
         - include/curl/*.h - Header files
-        - lib/libcurl.a - Static library
+        - lib/libcurl.dll.a - Import library for linking
+        - bin/libcurl-4.dll - Standalone DLL (no external dependencies)
         - lib/pkgconfig/libcurl.pc - pkg-config file
-        - bin/curl-config - Configuration script
         
         ## Linking Examples
         
-        ### GCC/MinGW:
+        ### GCC/MinGW (Dynamic linking):
         ```bash
-        gcc your_app.c -Iinclude -Llib -lcurl -lssl -lcrypto -lnghttp2 -lz \
-          -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion \
-          -static-libgcc -static-libstdc++ -static
+        gcc your_app.c -Iinclude -Llib -lcurl -o your_app.exe
+        # Copy libcurl-4.dll to your application directory
         ```
         
-        ### CMake:
+        ### CMake (Dynamic linking):
         ```cmake
-        find_library(CURL_LIBRARY NAMES libcurl.a PATHS ${CMAKE_CURRENT_SOURCE_DIR}/lib)
-        target_link_libraries(your_app ${CURL_LIBRARY} ssl crypto nghttp2 z 
-                              ws2_32 wldap32 crypt32 normaliz version)
+        find_library(CURL_LIBRARY NAMES libcurl.dll.a PATHS ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+        target_link_libraries(your_app ${CURL_LIBRARY})
         target_include_directories(your_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        # Install libcurl-4.dll with your application
         ```
         
         ## System Requirements
         - Windows 7 SP1 or later
-        - No additional DLLs required
+        - No additional DLLs required (all dependencies embedded)
         - Supports both x64 and x86 architectures
         
         ## Supported Protocols
@@ -556,9 +558,9 @@ jobs:
         
         ## Build Configuration
         - Compiler: MinGW-w64 GCC
-        - OpenSSL: 3.2.0 (static)
-        - nghttp2: 1.58.0 (static)  
-        - zlib: 1.3 (static)
+        - OpenSSL: 3.2.0 (statically embedded)
+        - nghttp2: 1.58.0 (statically embedded)  
+        - zlib: 1.3 (statically embedded)
         - Target: Windows 7+ (NT 6.1)
         
         Generated on: $(date)
@@ -597,15 +599,15 @@ jobs:
         }
         EOF
         
-        tar -czf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-static.tar.gz libcurl-win7-${{ matrix.arch }}
+        tar -czf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-dll.tar.gz libcurl-win7-${{ matrix.arch }}
         
         echo "=== Package Contents ==="
-        tar -tzf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-static.tar.gz | head -20
+        tar -tzf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-dll.tar.gz | head -20
     
     - name: Upload Win7 artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: libcurl-win7-${{ matrix.arch }}-static
+        name: libcurl-win7-${{ matrix.arch }}-dll
         path: ${{ github.workspace }}/install/libcurl-*.tar.gz
         retention-days: 30
     
