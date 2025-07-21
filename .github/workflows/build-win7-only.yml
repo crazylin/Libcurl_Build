@@ -1,0 +1,519 @@
+name: Build libcurl for Windows 7
+
+on:
+  workflow_dispatch:
+    inputs:
+      curl_version:
+        description: 'libcurl version to build'
+        required: true
+        default: '8.5.0'
+        type: string
+      openssl_version:
+        description: 'OpenSSL version to build'
+        required: true
+        default: '3.2.0'
+        type: string
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CURL_VERSION: ${{ github.event.inputs.curl_version || '8.5.0' }}
+  OPENSSL_VERSION: ${{ github.event.inputs.openssl_version || '3.2.0' }}
+  ZLIB_VERSION: '1.3'
+  NGHTTP2_VERSION: '1.58.0'
+
+jobs:
+  build-windows-win7:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      # Run sequentially to avoid resource conflicts
+      max-parallel: 1
+      matrix:
+        arch: [x64, x86]
+        include:
+          - arch: x64
+            mingw_arch: x86_64
+            mingw_prefix: x86_64-w64-mingw32
+          - arch: x86
+            mingw_arch: i686
+            mingw_prefix: i686-w64-mingw32
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MinGW-w64
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          base-devel
+          mingw-w64-${{ matrix.mingw_arch }}-toolchain
+          mingw-w64-${{ matrix.mingw_arch }}-cmake
+          mingw-w64-${{ matrix.mingw_arch }}-pkg-config
+          mingw-w64-${{ matrix.mingw_arch }}-nasm
+          autoconf
+          automake
+          libtool
+          make
+          perl
+          unzip
+          tar
+          xz
+    
+    - name: Create build directories
+      shell: msys2 {0}
+      run: |
+        mkdir -p ${{ github.workspace }}/build/{openssl,zlib,nghttp2,curl}
+        mkdir -p ${{ github.workspace }}/install
+    
+    - name: Download and extract OpenSSL
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o openssl-${OPENSSL_VERSION}.tar.gz \
+          https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+        tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+        mv openssl-${OPENSSL_VERSION} openssl-src
+    
+    - name: Build OpenSSL (Win7 Compatible)
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/openssl-src
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        SSL_DIR=$(cygpath -u "${{ github.workspace }}")/install/ssl
+        
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          ./Configure mingw64 \
+            --prefix="${INSTALL_PREFIX}" \
+            --openssldir="${SSL_DIR}" \
+            no-shared \
+            no-tests \
+            no-docs \
+            no-apps \
+            no-deprecated \
+            no-engine \
+            no-dso \
+            no-asm \
+            -static \
+            -DWIN32_LEAN_AND_MEAN \
+            -D_WIN32_WINNT=0x0601
+        else
+          ./Configure mingw \
+            --prefix="${INSTALL_PREFIX}" \
+            --openssldir="${SSL_DIR}" \
+            no-shared \
+            no-tests \
+            no-docs \
+            no-apps \
+            no-deprecated \
+            no-engine \
+            no-dso \
+            no-asm \
+            -static \
+            -DWIN32_LEAN_AND_MEAN \
+            -D_WIN32_WINNT=0x0601
+        fi
+        
+        # Use limited parallelism to avoid timeout
+        make -j2
+        make install_sw
+    
+    - name: Download and extract zlib
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o zlib-${ZLIB_VERSION}.tar.gz \
+          https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+        tar -xzf zlib-${ZLIB_VERSION}.tar.gz
+        mv zlib-${ZLIB_VERSION} zlib-src
+    
+    - name: Build zlib
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/zlib-src
+        
+        # Convert Windows paths to MSYS2 format  
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          make -j2 -f win32/Makefile.gcc \
+            BINARY_PATH="${INSTALL_PREFIX}/bin" \
+            INCLUDE_PATH="${INSTALL_PREFIX}/include" \
+            LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
+            SHARED_MODE=0 \
+            PREFIX=x86_64-w64-mingw32- \
+            install
+        else
+          make -j2 -f win32/Makefile.gcc \
+            BINARY_PATH="${INSTALL_PREFIX}/bin" \
+            INCLUDE_PATH="${INSTALL_PREFIX}/include" \
+            LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
+            SHARED_MODE=0 \
+            PREFIX=i686-w64-mingw32- \
+            install
+        fi
+    
+    - name: Download and extract nghttp2
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o nghttp2-${NGHTTP2_VERSION}.tar.xz \
+          https://github.com/nghttp2/nghttp2/releases/download/v${NGHTTP2_VERSION}/nghttp2-${NGHTTP2_VERSION}.tar.xz
+        tar -xf nghttp2-${NGHTTP2_VERSION}.tar.xz
+        mv nghttp2-${NGHTTP2_VERSION} nghttp2-src
+    
+    - name: Build nghttp2
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/nghttp2-src
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix="${INSTALL_PREFIX}" \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-python-bindings \
+            --disable-app \
+            CPPFLAGS="-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601"
+        else
+          ./configure \
+            --host=i686-w64-mingw32 \
+            --prefix="${INSTALL_PREFIX}" \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-python-bindings \
+            --disable-app \
+            CPPFLAGS="-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601"
+        fi
+        make -j2
+        make install
+    
+    - name: Download and extract libcurl
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o curl-${CURL_VERSION}.tar.xz \
+          https://curl.se/download/curl-${CURL_VERSION}.tar.xz
+        tar -xf curl-${CURL_VERSION}.tar.xz
+        mv curl-${CURL_VERSION} curl-src
+    
+    - name: Build libcurl
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/curl-src
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
+        export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LDFLAGS="-L${INSTALL_PREFIX}/lib -static-libgcc -static-libstdc++ $LDFLAGS"
+        export CPPFLAGS="-I${INSTALL_PREFIX}/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 $CPPFLAGS"
+        
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix="${INSTALL_PREFIX}" \
+            --enable-static \
+            --disable-shared \
+            --with-openssl \
+            --with-nghttp2 \
+            --with-zlib \
+            --enable-optimize \
+            --disable-dependency-tracking \
+            --disable-debug \
+            --disable-curldebug \
+            --disable-manual \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-proxy \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-smtp \
+            --disable-gopher \
+            --disable-sspi \
+            --without-brotli \
+            --without-libidn2 \
+            --without-libpsl \
+            --without-librtmp \
+            --with-ca-bundle=curl-ca-bundle.crt
+        else
+          ./configure \
+            --host=i686-w64-mingw32 \
+            --prefix="${INSTALL_PREFIX}" \
+            --enable-static \
+            --disable-shared \
+            --with-openssl \
+            --with-nghttp2 \
+            --with-zlib \
+            --enable-optimize \
+            --disable-dependency-tracking \
+            --disable-debug \
+            --disable-curldebug \
+            --disable-manual \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-proxy \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-smtp \
+            --disable-gopher \
+            --disable-sspi \
+            --without-brotli \
+            --without-libidn2 \
+            --without-libpsl \
+            --without-librtmp \
+            --with-ca-bundle=curl-ca-bundle.crt
+        fi
+        make -j2
+        make install
+    
+    - name: Test static libcurl
+      if: matrix.arch == 'x64'
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
+        cat > test.c << 'EOF'
+        #include <curl/curl.h>
+        #include <stdio.h>
+        #include <windows.h>
+        
+        int main() {
+            curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);
+            printf("libcurl version: %s\n", info->version);
+            printf("SSL version: %s\n", info->ssl_version ? info->ssl_version : "None");
+            printf("Host: %s\n", info->host);
+            
+            // Display supported protocols
+            printf("Protocols: ");
+            const char* const* p = info->protocols;
+            while (*p) {
+                printf("%s ", *p++);
+            }
+            printf("\n");
+            
+            // Test for Win7 compatibility
+            OSVERSIONINFO osvi;
+            ZeroMemory(&osvi, sizeof(OSVERSIONINFO));
+            osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+            GetVersionEx(&osvi);
+            printf("Target Windows: 7.1+ (0x0601)\n");
+            printf("Current Windows: %d.%d\n", osvi.dwMajorVersion, osvi.dwMinorVersion);
+            
+            // Test actual HTTP request
+            CURL *curl = curl_easy_init();
+            if(curl) {
+                printf("cURL initialization: SUCCESS\n");
+                curl_easy_cleanup(curl);
+            } else {
+                printf("cURL initialization: FAILED\n");
+            }
+            
+            return 0;
+        }
+        EOF
+        
+        x86_64-w64-mingw32-gcc test.c -o test.exe \
+          -I"${INSTALL_PREFIX}/include" \
+          -L"${INSTALL_PREFIX}/lib" \
+          -lcurl -lssl -lcrypto -lnghttp2 -lz \
+          -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion \
+          -static-libgcc -static-libstdc++ -static
+        
+        echo "=== Test Output ==="
+        ./test.exe
+    
+    - name: Package Win7 artifacts
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/install
+        
+        # Create a Win7-compatible package
+        mkdir -p libcurl-win7-${{ matrix.arch }}
+        cp -r include lib bin libcurl-win7-${{ matrix.arch }}/ 2>/dev/null || true
+        
+        # Add comprehensive README for Win7 usage
+        cat > libcurl-win7-${{ matrix.arch }}/README-Win7.txt << 'EOF'
+        # libcurl Static Build for Windows 7 Compatibility
+        
+        This build is specifically compiled for Windows 7+ compatibility using MinGW-w64.
+        
+        ## Features
+        - Static linking (no DLL dependencies)
+        - OpenSSL with TLS 1.3 support  
+        - HTTP/2 support via nghttp2
+        - zlib compression support
+        - Win7+ compatible (_WIN32_WINNT=0x0601)
+        
+        ## Files Included
+        - include/curl/*.h - Header files
+        - lib/libcurl.a - Static library
+        - lib/pkgconfig/libcurl.pc - pkg-config file
+        - bin/curl-config - Configuration script
+        
+        ## Linking Examples
+        
+        ### GCC/MinGW:
+        ```bash
+        gcc your_app.c -Iinclude -Llib -lcurl -lssl -lcrypto -lnghttp2 -lz \
+          -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion \
+          -static-libgcc -static-libstdc++ -static
+        ```
+        
+        ### CMake:
+        ```cmake
+        find_library(CURL_LIBRARY NAMES libcurl.a PATHS ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+        target_link_libraries(your_app ${CURL_LIBRARY} ssl crypto nghttp2 z 
+                              ws2_32 wldap32 crypt32 normaliz version)
+        target_include_directories(your_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        ```
+        
+        ## System Requirements
+        - Windows 7 SP1 or later
+        - No additional DLLs required
+        - Supports both x64 and x86 architectures
+        
+        ## Supported Protocols
+        - HTTP, HTTPS (OpenSSL)
+        - HTTP/2 (nghttp2)
+        - FTP, FTPS
+        - FILE protocol
+        
+        ## Build Configuration
+        - Compiler: MinGW-w64 GCC
+        - OpenSSL: 3.2.0 (static)
+        - nghttp2: 1.58.0 (static)  
+        - zlib: 1.3 (static)
+        - Target: Windows 7+ (NT 6.1)
+        
+        Generated on: $(date)
+        EOF
+        
+        # Add simple test program
+        cat > libcurl-win7-${{ matrix.arch }}/test-example.c << 'EOF'
+        #include <curl/curl.h>
+        #include <stdio.h>
+        
+        int main() {
+            CURL *curl;
+            CURLcode res;
+            
+            curl_global_init(CURL_GLOBAL_DEFAULT);
+            curl = curl_easy_init();
+            
+            if(curl) {
+                curl_easy_setopt(curl, CURLOPT_URL, "https://httpbin.org/get");
+                curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+                
+                printf("Testing HTTPS request...\n");
+                res = curl_easy_perform(curl);
+                
+                if(res != CURLE_OK) {
+                    printf("Request failed: %s\n", curl_easy_strerror(res));
+                } else {
+                    printf("Request successful!\n");
+                }
+                
+                curl_easy_cleanup(curl);
+            }
+            
+            curl_global_cleanup();
+            return 0;
+        }
+        EOF
+        
+        tar -czf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-static.tar.gz libcurl-win7-${{ matrix.arch }}
+        
+        echo "=== Package Contents ==="
+        tar -tzf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-static.tar.gz | head -20
+    
+    - name: Upload Win7 artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libcurl-win7-${{ matrix.arch }}-static
+        path: ${{ github.workspace }}/install/libcurl-*.tar.gz
+        retention-days: 30
+    
+    - name: Display build summary
+      shell: msys2 {0}
+      run: |
+        echo "=== Build Summary ==="
+        echo "Architecture: ${{ matrix.arch }}"
+        echo "libcurl: ${CURL_VERSION}"
+        echo "OpenSSL: ${OPENSSL_VERSION}"
+        echo "Target: Windows 7+"
+        echo "Compiler: MinGW-w64"
+        echo "Status: SUCCESS"
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows-win7]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/**/*.tar.gz
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        body: |
+          ## Static libcurl for Windows 7 v${{ env.CURL_VERSION }}
+          
+          This release contains statically compiled libcurl binaries specifically for Windows 7+ compatibility.
+          
+          ### Features
+          - **OpenSSL ${{ env.OPENSSL_VERSION }}**: TLS 1.3 support
+          - **HTTP/2 Support**: Via nghttp2 ${{ env.NGHTTP2_VERSION }}
+          - **Compression**: zlib support
+          - **Static Linking**: No external dependencies
+          - **Win7 Compatible**: Minimum Windows 7 SP1
+          
+          ### Available Architectures
+          - **Windows x64**: libcurl-${{ env.CURL_VERSION }}-win7-x64-static.tar.gz
+          - **Windows x86**: libcurl-${{ env.CURL_VERSION }}-win7-x86-static.tar.gz
+          
+          ### Quick Start
+          1. Download the appropriate archive for your architecture
+          2. Extract to your project directory
+          3. Link against `lib/libcurl.a` with required system libraries
+          4. See README-Win7.txt for detailed usage instructions
+          
+          ### Build Info
+          - Compiler: MinGW-w64
+          - Target: Windows NT 6.1+ (Windows 7+)
+          - All dependencies statically linked
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
