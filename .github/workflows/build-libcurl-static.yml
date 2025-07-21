@@ -1,0 +1,781 @@
+name: Build Static libcurl
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      curl_version:
+        description: 'libcurl version to build'
+        required: true
+        default: '8.5.0'
+        type: string
+      openssl_version:
+        description: 'OpenSSL version to build'
+        required: true
+        default: '3.2.0'
+        type: string
+
+env:
+  CURL_VERSION: ${{ github.event.inputs.curl_version || '8.5.0' }}
+  OPENSSL_VERSION: ${{ github.event.inputs.openssl_version || '3.2.0' }}
+  ZLIB_VERSION: '1.3'
+  NGHTTP2_VERSION: '1.58.0'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          ninja-build \
+          pkg-config \
+          autoconf \
+          libtool \
+          perl \
+          nasm \
+          gcc-aarch64-linux-gnu \
+          g++-aarch64-linux-gnu
+    
+    - name: Set up cross-compilation environment
+      if: matrix.arch == 'aarch64'
+      run: |
+        echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+        echo "AR=aarch64-linux-gnu-ar" >> $GITHUB_ENV
+        echo "STRIP=aarch64-linux-gnu-strip" >> $GITHUB_ENV
+        echo "HOST_TRIPLET=aarch64-linux-gnu" >> $GITHUB_ENV
+    
+    - name: Set up native compilation environment
+      if: matrix.arch == 'x86_64'
+      run: |
+        echo "CC=gcc" >> $GITHUB_ENV
+        echo "CXX=g++" >> $GITHUB_ENV
+        echo "AR=ar" >> $GITHUB_ENV
+        echo "STRIP=strip" >> $GITHUB_ENV
+        echo "HOST_TRIPLET=x86_64-linux-gnu" >> $GITHUB_ENV
+    
+    - name: Create build directories
+      run: |
+        mkdir -p ${{ github.workspace }}/build/{openssl,zlib,nghttp2,curl}
+        mkdir -p ${{ github.workspace }}/install
+    
+    - name: Download and extract OpenSSL
+      run: |
+        cd ${{ github.workspace }}/build
+        wget -O openssl-${OPENSSL_VERSION}.tar.gz \
+          https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+        tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+        mv openssl-${OPENSSL_VERSION} openssl-src
+    
+    - name: Build OpenSSL
+      run: |
+        cd ${{ github.workspace }}/build/openssl-src
+        if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          ./Configure linux-aarch64 \
+            --prefix=${{ github.workspace }}/install \
+            --openssldir=${{ github.workspace }}/install/ssl \
+            no-shared \
+            no-tests \
+            -static \
+            --cross-compile-prefix=aarch64-linux-gnu-
+        else
+          ./Configure linux-x86_64 \
+            --prefix=${{ github.workspace }}/install \
+            --openssldir=${{ github.workspace }}/install/ssl \
+            no-shared \
+            no-tests \
+            -static
+        fi
+        make -j$(nproc)
+        make install_sw
+    
+    - name: Download and extract zlib
+      run: |
+        cd ${{ github.workspace }}/build
+        wget -O zlib-${ZLIB_VERSION}.tar.gz \
+          https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+        tar -xzf zlib-${ZLIB_VERSION}.tar.gz
+        mv zlib-${ZLIB_VERSION} zlib-src
+    
+    - name: Build zlib
+      run: |
+        cd ${{ github.workspace }}/build/zlib-src
+        if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar \
+          ./configure --prefix=${{ github.workspace }}/install --static
+        else
+          ./configure --prefix=${{ github.workspace }}/install --static
+        fi
+        make -j$(nproc)
+        make install
+    
+    - name: Download and extract nghttp2
+      run: |
+        cd ${{ github.workspace }}/build
+        wget -O nghttp2-${NGHTTP2_VERSION}.tar.xz \
+          https://github.com/nghttp2/nghttp2/releases/download/v${NGHTTP2_VERSION}/nghttp2-${NGHTTP2_VERSION}.tar.xz
+        tar -xf nghttp2-${NGHTTP2_VERSION}.tar.xz
+        mv nghttp2-${NGHTTP2_VERSION} nghttp2-src
+    
+    - name: Build nghttp2
+      run: |
+        cd ${{ github.workspace }}/build/nghttp2-src
+        if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-python-bindings \
+            --disable-app
+        else
+          ./configure \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-python-bindings \
+            --disable-app
+        fi
+        make -j$(nproc)
+        make install
+    
+    - name: Download and extract libcurl
+      run: |
+        cd ${{ github.workspace }}/build
+        wget -O curl-${CURL_VERSION}.tar.xz \
+          https://curl.se/download/curl-${CURL_VERSION}.tar.xz
+        tar -xf curl-${CURL_VERSION}.tar.xz
+        mv curl-${CURL_VERSION} curl-src
+    
+    - name: Build libcurl
+      run: |
+        cd ${{ github.workspace }}/build/curl-src
+        export PKG_CONFIG_PATH="${{ github.workspace }}/install/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LDFLAGS="-L${{ github.workspace }}/install/lib $LDFLAGS"
+        export CPPFLAGS="-I${{ github.workspace }}/install/include $CPPFLAGS"
+        
+        if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --with-openssl \
+            --with-nghttp2 \
+            --with-zlib \
+            --enable-optimize \
+            --disable-dependency-tracking \
+            --disable-debug \
+            --disable-curldebug \
+            --disable-manual \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-proxy \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-smtp \
+            --disable-gopher \
+            --disable-sspi \
+            --without-brotli \
+            --without-libidn2 \
+            --without-libpsl \
+            --without-librtmp
+        else
+          ./configure \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --with-openssl \
+            --with-nghttp2 \
+            --with-zlib \
+            --enable-optimize \
+            --disable-dependency-tracking \
+            --disable-debug \
+            --disable-curldebug \
+            --disable-manual \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-proxy \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-smtp \
+            --disable-gopher \
+            --disable-sspi \
+            --without-brotli \
+            --without-libidn2 \
+            --without-libpsl \
+            --without-librtmp
+        fi
+        make -j$(nproc)
+        make install
+    
+    - name: Test static libcurl
+      if: matrix.arch == 'x86_64'
+      run: |
+        echo '#include <curl/curl.h>' > test.c
+        echo '#include <stdio.h>' >> test.c
+        echo 'int main() {' >> test.c
+        echo '  curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);' >> test.c
+        echo '  printf("libcurl version: %s\n", info->version);' >> test.c
+        echo '  printf("SSL version: %s\n", info->ssl_version);' >> test.c
+        echo '  printf("Protocols: ");' >> test.c
+        echo '  const char* const* p = info->protocols;' >> test.c
+        echo '  while (*p) printf("%s ", *p++);' >> test.c
+        echo '  printf("\n");' >> test.c
+        echo '  return 0;' >> test.c
+        echo '}' >> test.c
+        
+        gcc test.c -o test \
+          -I${{ github.workspace }}/install/include \
+          -L${{ github.workspace }}/install/lib \
+          -lcurl -lssl -lcrypto -lnghttp2 -lz -lpthread -ldl
+        
+        ./test
+    
+    - name: Package artifacts
+      run: |
+        cd ${{ github.workspace }}/install
+        tar -czf libcurl-${CURL_VERSION}-linux-${{ matrix.arch }}-static.tar.gz \
+          include/curl \
+          lib/libcurl.a \
+          lib/pkgconfig/libcurl.pc \
+          bin/curl-config
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libcurl-linux-${{ matrix.arch }}-static
+        path: ${{ github.workspace }}/install/libcurl-*.tar.gz
+        retention-days: 30
+
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, x86]
+        include:
+          - arch: x64
+            mingw_arch: x86_64
+            mingw_prefix: x86_64-w64-mingw32
+          - arch: x86
+            mingw_arch: i686
+            mingw_prefix: i686-w64-mingw32
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MinGW-w64
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          base-devel
+          mingw-w64-${{ matrix.mingw_arch }}-toolchain
+          mingw-w64-${{ matrix.mingw_arch }}-cmake
+          mingw-w64-${{ matrix.mingw_arch }}-ninja
+          mingw-w64-${{ matrix.mingw_arch }}-pkg-config
+          mingw-w64-${{ matrix.mingw_arch }}-nasm
+          autoconf
+          automake
+          libtool
+          make
+          perl
+          unzip
+          tar
+          xz
+    
+    - name: Create build directories
+      shell: msys2 {0}
+      run: |
+        mkdir -p ${{ github.workspace }}/build/{openssl,zlib,nghttp2,curl}
+        mkdir -p ${{ github.workspace }}/install
+    
+    - name: Download and extract OpenSSL
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o openssl-${OPENSSL_VERSION}.tar.gz \
+          https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+        tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+        mv openssl-${OPENSSL_VERSION} openssl-src
+    
+    - name: Build OpenSSL
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/openssl-src
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          ./Configure mingw64 \
+            --prefix=${{ github.workspace }}/install \
+            --openssldir=${{ github.workspace }}/install/ssl \
+            no-shared \
+            no-tests \
+            -static \
+            -DWIN32_LEAN_AND_MEAN \
+            -D_WIN32_WINNT=0x0601
+        else
+          ./Configure mingw \
+            --prefix=${{ github.workspace }}/install \
+            --openssldir=${{ github.workspace }}/install/ssl \
+            no-shared \
+            no-tests \
+            -static \
+            -DWIN32_LEAN_AND_MEAN \
+            -D_WIN32_WINNT=0x0601
+        fi
+        make -j$(nproc)
+        make install_sw
+    
+    - name: Download and extract zlib
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o zlib-${ZLIB_VERSION}.tar.gz \
+          https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+        tar -xzf zlib-${ZLIB_VERSION}.tar.gz
+        mv zlib-${ZLIB_VERSION} zlib-src
+    
+    - name: Build zlib
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/zlib-src
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          make -f win32/Makefile.gcc \
+            BINARY_PATH=${{ github.workspace }}/install/bin \
+            INCLUDE_PATH=${{ github.workspace }}/install/include \
+            LIBRARY_PATH=${{ github.workspace }}/install/lib \
+            SHARED_MODE=0 \
+            PREFIX=x86_64-w64-mingw32- \
+            install
+        else
+          make -f win32/Makefile.gcc \
+            BINARY_PATH=${{ github.workspace }}/install/bin \
+            INCLUDE_PATH=${{ github.workspace }}/install/include \
+            LIBRARY_PATH=${{ github.workspace }}/install/lib \
+            SHARED_MODE=0 \
+            PREFIX=i686-w64-mingw32- \
+            install
+        fi
+    
+    - name: Download and extract nghttp2
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o nghttp2-${NGHTTP2_VERSION}.tar.xz \
+          https://github.com/nghttp2/nghttp2/releases/download/v${NGHTTP2_VERSION}/nghttp2-${NGHTTP2_VERSION}.tar.xz
+        tar -xf nghttp2-${NGHTTP2_VERSION}.tar.xz
+        mv nghttp2-${NGHTTP2_VERSION} nghttp2-src
+    
+    - name: Build nghttp2
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/nghttp2-src
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-python-bindings \
+            --disable-app \
+            CPPFLAGS="-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601"
+        else
+          ./configure \
+            --host=i686-w64-mingw32 \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-python-bindings \
+            --disable-app \
+            CPPFLAGS="-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601"
+        fi
+        make -j$(nproc)
+        make install
+    
+    - name: Download and extract libcurl
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o curl-${CURL_VERSION}.tar.xz \
+          https://curl.se/download/curl-${CURL_VERSION}.tar.xz
+        tar -xf curl-${CURL_VERSION}.tar.xz
+        mv curl-${CURL_VERSION} curl-src
+    
+    - name: Build libcurl
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/build/curl-src
+        export PKG_CONFIG_PATH="${{ github.workspace }}/install/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LDFLAGS="-L${{ github.workspace }}/install/lib -static-libgcc -static-libstdc++ $LDFLAGS"
+        export CPPFLAGS="-I${{ github.workspace }}/install/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 $CPPFLAGS"
+        
+        if [ "${{ matrix.arch }}" = "x64" ]; then
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --with-openssl \
+            --with-nghttp2 \
+            --with-zlib \
+            --enable-optimize \
+            --disable-dependency-tracking \
+            --disable-debug \
+            --disable-curldebug \
+            --disable-manual \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-proxy \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-smtp \
+            --disable-gopher \
+            --disable-sspi \
+            --without-brotli \
+            --without-libidn2 \
+            --without-libpsl \
+            --without-librtmp \
+            --with-ca-bundle=curl-ca-bundle.crt
+        else
+          ./configure \
+            --host=i686-w64-mingw32 \
+            --prefix=${{ github.workspace }}/install \
+            --enable-static \
+            --disable-shared \
+            --with-openssl \
+            --with-nghttp2 \
+            --with-zlib \
+            --enable-optimize \
+            --disable-dependency-tracking \
+            --disable-debug \
+            --disable-curldebug \
+            --disable-manual \
+            --disable-ldap \
+            --disable-ldaps \
+            --disable-rtsp \
+            --disable-proxy \
+            --disable-dict \
+            --disable-telnet \
+            --disable-tftp \
+            --disable-pop3 \
+            --disable-imap \
+            --disable-smb \
+            --disable-smtp \
+            --disable-gopher \
+            --disable-sspi \
+            --without-brotli \
+            --without-libidn2 \
+            --without-libpsl \
+            --without-librtmp \
+            --with-ca-bundle=curl-ca-bundle.crt
+        fi
+        make -j$(nproc)
+        make install
+    
+    - name: Test static libcurl (x64 only)
+      if: matrix.arch == 'x64'
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}
+        cat > test.c << 'EOF'
+        #include <curl/curl.h>
+        #include <stdio.h>
+        #include <windows.h>
+        
+        int main() {
+            curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);
+            printf("libcurl version: %s\n", info->version);
+            printf("SSL version: %s\n", info->ssl_version ? info->ssl_version : "None");
+            printf("Host: %s\n", info->host);
+            
+            // Test for Win7 compatibility
+            OSVERSIONINFO osvi;
+            ZeroMemory(&osvi, sizeof(OSVERSIONINFO));
+            osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+            GetVersionEx(&osvi);
+            printf("Windows version: %d.%d\n", osvi.dwMajorVersion, osvi.dwMinorVersion);
+            
+            return 0;
+        }
+        EOF
+        
+        x86_64-w64-mingw32-gcc test.c -o test.exe \
+          -I${{ github.workspace }}/install/include \
+          -L${{ github.workspace }}/install/lib \
+          -lcurl -lssl -lcrypto -lnghttp2 -lz \
+          -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion \
+          -static-libgcc -static-libstdc++ -static
+        
+        ./test.exe
+    
+    - name: Package artifacts
+      shell: msys2 {0}
+      run: |
+        cd ${{ github.workspace }}/install
+        # Create a Win7-compatible package
+        mkdir -p libcurl-win7-${{ matrix.arch }}
+        cp -r include lib bin libcurl-win7-${{ matrix.arch }}/
+        
+        # Add README for Win7 usage
+        cat > libcurl-win7-${{ matrix.arch }}/README-Win7.txt << 'EOF'
+        libcurl Static Build for Windows 7 Compatibility
+        
+        This build is specifically compiled for Windows 7 compatibility using MinGW-w64.
+        
+        Features:
+        - Static linking (no DLL dependencies)
+        - OpenSSL with TLS 1.3 support
+        - HTTP/2 support via nghttp2
+        - Win7+ compatible (_WIN32_WINNT=0x0601)
+        
+        Linking example:
+        gcc your_app.c -Iinclude -Llib -lcurl -lssl -lcrypto -lnghttp2 -lz \
+          -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion \
+          -static-libgcc -static-libstdc++ -static
+        
+        Note: This library requires Windows 7 SP1 or later.
+        EOF
+        
+        tar -czf libcurl-${CURL_VERSION}-win7-${{ matrix.arch }}-static.tar.gz libcurl-win7-${{ matrix.arch }}
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libcurl-win7-${{ matrix.arch }}-static
+        path: ${{ github.workspace }}/install/libcurl-*.tar.gz
+        retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        brew install cmake ninja pkg-config autoconf libtool nasm
+    
+    - name: Set up compilation environment
+      run: |
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          echo "CMAKE_OSX_ARCHITECTURES=arm64" >> $GITHUB_ENV
+          echo "CFLAGS=-arch arm64" >> $GITHUB_ENV
+          echo "CXXFLAGS=-arch arm64" >> $GITHUB_ENV
+          echo "LDFLAGS=-arch arm64" >> $GITHUB_ENV
+          echo "HOST_TRIPLET=aarch64-apple-darwin" >> $GITHUB_ENV
+        else
+          echo "CMAKE_OSX_ARCHITECTURES=x86_64" >> $GITHUB_ENV
+          echo "CFLAGS=-arch x86_64" >> $GITHUB_ENV
+          echo "CXXFLAGS=-arch x86_64" >> $GITHUB_ENV
+          echo "LDFLAGS=-arch x86_64" >> $GITHUB_ENV
+          echo "HOST_TRIPLET=x86_64-apple-darwin" >> $GITHUB_ENV
+        fi
+        echo "MACOSX_DEPLOYMENT_TARGET=10.9" >> $GITHUB_ENV
+    
+    - name: Create build directories
+      run: |
+        mkdir -p ${{ github.workspace }}/build/{openssl,zlib,nghttp2,curl}
+        mkdir -p ${{ github.workspace }}/install
+    
+    - name: Download and build OpenSSL
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o openssl-${OPENSSL_VERSION}.tar.gz \
+          https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+        tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+        cd openssl-${OPENSSL_VERSION}
+        
+        if [ "${{ matrix.arch }}" = "arm64" ]; then
+          ./Configure darwin64-arm64-cc \
+            --prefix=${{ github.workspace }}/install \
+            no-shared no-tests -static
+        else
+          ./Configure darwin64-x86_64-cc \
+            --prefix=${{ github.workspace }}/install \
+            no-shared no-tests -static
+        fi
+        make -j$(sysctl -n hw.ncpu)
+        make install_sw
+    
+    - name: Download and build zlib
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o zlib-${ZLIB_VERSION}.tar.gz https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+        tar -xzf zlib-${ZLIB_VERSION}.tar.gz
+        cd zlib-${ZLIB_VERSION}
+        
+        ./configure --prefix=${{ github.workspace }}/install --static
+        make -j$(sysctl -n hw.ncpu)
+        make install
+    
+    - name: Download and build nghttp2
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o nghttp2-${NGHTTP2_VERSION}.tar.xz \
+          https://github.com/nghttp2/nghttp2/releases/download/v${NGHTTP2_VERSION}/nghttp2-${NGHTTP2_VERSION}.tar.xz
+        tar -xf nghttp2-${NGHTTP2_VERSION}.tar.xz
+        cd nghttp2-${NGHTTP2_VERSION}
+        
+        ./configure \
+          --prefix=${{ github.workspace }}/install \
+          --enable-static --disable-shared \
+          --disable-examples --disable-python-bindings --disable-app
+        make -j$(sysctl -n hw.ncpu)
+        make install
+    
+    - name: Download and build libcurl
+      run: |
+        cd ${{ github.workspace }}/build
+        curl -L -o curl-${CURL_VERSION}.tar.xz https://curl.se/download/curl-${CURL_VERSION}.tar.xz
+        tar -xf curl-${CURL_VERSION}.tar.xz
+        cd curl-${CURL_VERSION}
+        
+        export PKG_CONFIG_PATH="${{ github.workspace }}/install/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LDFLAGS="-L${{ github.workspace }}/install/lib $LDFLAGS"
+        export CPPFLAGS="-I${{ github.workspace }}/install/include $CPPFLAGS"
+        
+        ./configure \
+          --prefix=${{ github.workspace }}/install \
+          --enable-static --disable-shared \
+          --with-openssl --with-nghttp2 --with-zlib \
+          --enable-optimize \
+          --disable-dependency-tracking \
+          --disable-debug --disable-curldebug \
+          --disable-manual \
+          --without-brotli --without-libidn2 --without-libpsl
+        make -j$(sysctl -n hw.ncpu)
+        make install
+    
+    - name: Test static libcurl
+      if: matrix.arch == 'x86_64'
+      run: |
+        echo '#include <curl/curl.h>' > test.c
+        echo '#include <stdio.h>' >> test.c
+        echo 'int main() {' >> test.c
+        echo '  curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);' >> test.c
+        echo '  printf("libcurl version: %s\n", info->version);' >> test.c
+        echo '  printf("SSL version: %s\n", info->ssl_version);' >> test.c
+        echo '  return 0;' >> test.c
+        echo '}' >> test.c
+        
+        clang test.c -o test \
+          -I${{ github.workspace }}/install/include \
+          -L${{ github.workspace }}/install/lib \
+          -lcurl -lssl -lcrypto -lnghttp2 -lz
+        
+        ./test
+    
+    - name: Package artifacts
+      run: |
+        cd ${{ github.workspace }}/install
+        tar -czf libcurl-${CURL_VERSION}-macos-${{ matrix.arch }}-static.tar.gz \
+          include/curl \
+          lib/libcurl.a \
+          lib/pkgconfig/libcurl.pc \
+          bin/curl-config
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libcurl-macos-${{ matrix.arch }}-static
+        path: ${{ github.workspace }}/install/libcurl-*.tar.gz
+        retention-days: 30
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: Create release archives
+      run: |
+        mkdir -p release
+        cd artifacts
+        
+        # Combine all platform artifacts
+        for dir in */; do
+          cp "$dir"/* ../release/
+        done
+        
+        cd ../release
+        ls -la
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        body: |
+          ## Static libcurl Build v${{ env.CURL_VERSION }}
+          
+          This release contains statically compiled libcurl binaries for multiple platforms:
+          
+          ### Features
+          - **OpenSSL ${{ env.OPENSSL_VERSION }}**: TLS 1.3 support
+          - **HTTP/2 Support**: Via nghttp2 ${{ env.NGHTTP2_VERSION }}
+          - **Compression**: zlib support
+          - **Static Linking**: No external dependencies
+          
+          ### Supported Platforms
+          - **Linux**: x86_64, aarch64
+          - **Windows**: x64, x86, arm64
+          - **macOS**: x86_64, arm64 (Apple Silicon)
+          
+          ### Usage
+          Extract the appropriate archive for your platform and link against `libcurl.a`.
+          
+          ### Build Configuration
+          ```
+          - OpenSSL: Static linking, no shared dependencies
+          - Protocols: HTTP, HTTPS, HTTP/2
+          - Compression: gzip, deflate
+          - Features: Optimized, debug disabled
+          ```
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
