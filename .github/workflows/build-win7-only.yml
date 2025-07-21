@@ -75,10 +75,30 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build
-        curl -L -o openssl-${OPENSSL_VERSION}.tar.gz \
-          https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
-        tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
-        mv openssl-${OPENSSL_VERSION} openssl-src
+        # Try multiple OpenSSL download sources
+        if curl -L -o openssl-${OPENSSL_VERSION}.tar.gz \
+          https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz; then
+          echo "Downloaded OpenSSL from official site"
+        elif curl -L -o openssl-${OPENSSL_VERSION}.tar.gz \
+          https://github.com/openssl/openssl/archive/refs/tags/openssl-${OPENSSL_VERSION}.tar.gz; then
+          echo "Downloaded OpenSSL from GitHub"
+          # GitHub archive has different directory structure
+          tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+          mv openssl-openssl-${OPENSSL_VERSION} openssl-src
+          exit 0
+        else
+          echo "Failed to download OpenSSL"
+          exit 1
+        fi
+        
+        # Verify and extract
+        if file openssl-${OPENSSL_VERSION}.tar.gz | grep -q "gzip compressed"; then
+          tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+          mv openssl-${OPENSSL_VERSION} openssl-src
+        else
+          echo "OpenSSL download failed, not a valid gzip file"
+          exit 1
+        fi
     
     - name: Build OpenSSL (Win7 Compatible)
       shell: msys2 {0}
@@ -129,8 +149,30 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build
-        curl -L -o zlib-${ZLIB_VERSION}.tar.gz \
-          https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+        # Try multiple zlib mirrors in order
+        if curl -L -o zlib-${ZLIB_VERSION}.tar.gz \
+          https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz; then
+          echo "Downloaded from GitHub releases"
+        elif curl -L -o zlib-${ZLIB_VERSION}.tar.gz \
+          https://sourceforge.net/projects/libpng/files/zlib/${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz/download; then
+          echo "Downloaded from SourceForge"  
+        elif curl -L -o zlib-${ZLIB_VERSION}.tar.gz \
+          https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz; then
+          echo "Downloaded from zlib.net fossils"
+        else
+          echo "Failed to download zlib from any mirror"
+          exit 1
+        fi
+        
+        # Verify the file is actually gzipped
+        if file zlib-${ZLIB_VERSION}.tar.gz | grep -q "gzip compressed"; then
+          echo "zlib archive verified as gzip"
+        else
+          echo "Downloaded file is not gzipped, checking content..."
+          head -5 zlib-${ZLIB_VERSION}.tar.gz
+          exit 1
+        fi
+        
         tar -xzf zlib-${ZLIB_VERSION}.tar.gz
         mv zlib-${ZLIB_VERSION} zlib-src
     
@@ -164,10 +206,25 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build
-        curl -L -o nghttp2-${NGHTTP2_VERSION}.tar.xz \
-          https://github.com/nghttp2/nghttp2/releases/download/v${NGHTTP2_VERSION}/nghttp2-${NGHTTP2_VERSION}.tar.xz
-        tar -xf nghttp2-${NGHTTP2_VERSION}.tar.xz
-        mv nghttp2-${NGHTTP2_VERSION} nghttp2-src
+        # Download nghttp2 with verification
+        if curl -L -o nghttp2-${NGHTTP2_VERSION}.tar.xz \
+          https://github.com/nghttp2/nghttp2/releases/download/v${NGHTTP2_VERSION}/nghttp2-${NGHTTP2_VERSION}.tar.xz; then
+          echo "Downloaded nghttp2 from GitHub releases"
+        else
+          echo "Failed to download nghttp2"
+          exit 1
+        fi
+        
+        # Verify the file format
+        if file nghttp2-${NGHTTP2_VERSION}.tar.xz | grep -q "XZ compressed"; then
+          echo "nghttp2 archive verified as XZ"
+          tar -xf nghttp2-${NGHTTP2_VERSION}.tar.xz
+          mv nghttp2-${NGHTTP2_VERSION} nghttp2-src
+        else
+          echo "Downloaded nghttp2 file is not XZ compressed"
+          file nghttp2-${NGHTTP2_VERSION}.tar.xz
+          exit 1
+        fi
     
     - name: Build nghttp2
       shell: msys2 {0}
@@ -205,10 +262,28 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build
-        curl -L -o curl-${CURL_VERSION}.tar.xz \
-          https://curl.se/download/curl-${CURL_VERSION}.tar.xz
-        tar -xf curl-${CURL_VERSION}.tar.xz
-        mv curl-${CURL_VERSION} curl-src
+        # Download libcurl with verification
+        if curl -L -o curl-${CURL_VERSION}.tar.xz \
+          https://curl.se/download/curl-${CURL_VERSION}.tar.xz; then
+          echo "Downloaded libcurl from official site"
+        elif curl -L -o curl-${CURL_VERSION}.tar.xz \
+          https://github.com/curl/curl/releases/download/curl-$(echo ${CURL_VERSION} | tr . _)/curl-${CURL_VERSION}.tar.xz; then
+          echo "Downloaded libcurl from GitHub releases"
+        else
+          echo "Failed to download libcurl"
+          exit 1
+        fi
+        
+        # Verify the file format
+        if file curl-${CURL_VERSION}.tar.xz | grep -q "XZ compressed"; then
+          echo "libcurl archive verified as XZ"
+          tar -xf curl-${CURL_VERSION}.tar.xz
+          mv curl-${CURL_VERSION} curl-src
+        else
+          echo "Downloaded libcurl file is not XZ compressed"
+          file curl-${CURL_VERSION}.tar.xz
+          exit 1
+        fi
     
     - name: Build libcurl
       shell: msys2 {0}
