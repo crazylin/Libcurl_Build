@@ -1,4 +1,4 @@
-name: Build libcurl for Windows 7 (Max Threads)
+name: Build libcurl for Windows 7 (Fixed Nonblock)
 
 on:
   workflow_dispatch:
@@ -363,11 +363,12 @@ jobs:
         
         export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH"
         export LDFLAGS="-L${INSTALL_PREFIX}/lib -static-libgcc -static-libstdc++ $LDFLAGS"
-        export CPPFLAGS="-I${INSTALL_PREFIX}/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 $CPPFLAGS"
+        export CPPFLAGS="-I${INSTALL_PREFIX}/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 -DHAVE_STRUCT_SOCKADDR_STORAGE -DHAVE_IOCTLSOCKET -DHAVE_IOCTLSOCKET_FIONBIO $CPPFLAGS"
         
         if [ "${{ matrix.arch }}" = "x64" ]; then
           ./configure \
             --host=x86_64-w64-mingw32 \
+            --build=x86_64-w64-mingw32 \
             --prefix="${INSTALL_PREFIX}" \
             --enable-static \
             --disable-shared \
@@ -396,10 +397,13 @@ jobs:
             --without-libidn2 \
             --without-libpsl \
             --without-librtmp \
-            --with-ca-bundle=curl-ca-bundle.crt
+            --with-ca-bundle=curl-ca-bundle.crt \
+            --enable-nonblocking \
+            --with-winidn
         else
           ./configure \
             --host=i686-w64-mingw32 \
+            --build=i686-w64-mingw32 \
             --prefix="${INSTALL_PREFIX}" \
             --enable-static \
             --disable-shared \
@@ -428,7 +432,9 @@ jobs:
             --without-libidn2 \
             --without-libpsl \
             --without-librtmp \
-            --with-ca-bundle=curl-ca-bundle.crt
+            --with-ca-bundle=curl-ca-bundle.crt \
+            --enable-nonblocking \
+            --with-winidn
         fi
         make -j$(nproc)
         make install
