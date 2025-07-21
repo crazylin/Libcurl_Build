@@ -56,6 +56,7 @@ jobs:
           mingw-w64-${{ matrix.mingw_arch }}-cmake
           mingw-w64-${{ matrix.mingw_arch }}-pkg-config
           mingw-w64-${{ matrix.mingw_arch }}-nasm
+          mingw-w64-${{ matrix.mingw_arch }}-tools-git
           autoconf
           automake
           libtool
@@ -184,22 +185,45 @@ jobs:
         # Convert Windows paths to MSYS2 format  
         INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
         
+        # Method 1: Try traditional Makefile approach first
         if [ "${{ matrix.arch }}" = "x64" ]; then
-          make -j2 -f win32/Makefile.gcc \
-            BINARY_PATH="${INSTALL_PREFIX}/bin" \
-            INCLUDE_PATH="${INSTALL_PREFIX}/include" \
-            LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
-            SHARED_MODE=0 \
-            PREFIX=x86_64-w64-mingw32- \
-            install
+          # Check if windres is available
+          if command -v x86_64-w64-mingw32-windres > /dev/null 2>&1; then
+            echo "Using windres-enabled build"
+            make -j2 -f win32/Makefile.gcc \
+              BINARY_PATH="${INSTALL_PREFIX}/bin" \
+              INCLUDE_PATH="${INSTALL_PREFIX}/include" \
+              LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
+              SHARED_MODE=0 \
+              PREFIX=x86_64-w64-mingw32- \
+              install
+          else
+            echo "windres not found, using alternative build method"
+            # Method 2: Use configure-based build
+            CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar \
+            ./configure --prefix="${INSTALL_PREFIX}" --static
+            make -j2
+            make install
+          fi
         else
-          make -j2 -f win32/Makefile.gcc \
-            BINARY_PATH="${INSTALL_PREFIX}/bin" \
-            INCLUDE_PATH="${INSTALL_PREFIX}/include" \
-            LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
-            SHARED_MODE=0 \
-            PREFIX=i686-w64-mingw32- \
-            install
+          # Check if windres is available for i686
+          if command -v i686-w64-mingw32-windres > /dev/null 2>&1; then
+            echo "Using windres-enabled build"
+            make -j2 -f win32/Makefile.gcc \
+              BINARY_PATH="${INSTALL_PREFIX}/bin" \
+              INCLUDE_PATH="${INSTALL_PREFIX}/include" \
+              LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
+              SHARED_MODE=0 \
+              PREFIX=i686-w64-mingw32- \
+              install
+          else
+            echo "windres not found, using alternative build method"
+            # Method 2: Use configure-based build
+            CC=i686-w64-mingw32-gcc AR=i686-w64-mingw32-ar \
+            ./configure --prefix="${INSTALL_PREFIX}" --static
+            make -j2
+            make install
+          fi
         fi
     
     - name: Download and extract nghttp2
