@@ -332,10 +332,15 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build/openssl-src
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        SSL_DIR=$(cygpath -u "${{ github.workspace }}")/install/ssl
+        
         if [ "${{ matrix.arch }}" = "x64" ]; then
           ./Configure mingw64 \
-            --prefix=${{ github.workspace }}/install \
-            --openssldir=${{ github.workspace }}/install/ssl \
+            --prefix="${INSTALL_PREFIX}" \
+            --openssldir="${SSL_DIR}" \
             no-shared \
             no-tests \
             -static \
@@ -343,8 +348,8 @@ jobs:
             -D_WIN32_WINNT=0x0601
         else
           ./Configure mingw \
-            --prefix=${{ github.workspace }}/install \
-            --openssldir=${{ github.workspace }}/install/ssl \
+            --prefix="${INSTALL_PREFIX}" \
+            --openssldir="${SSL_DIR}" \
             no-shared \
             no-tests \
             -static \
@@ -367,19 +372,23 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build/zlib-src
+        
+        # Convert Windows paths to MSYS2 format  
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
         if [ "${{ matrix.arch }}" = "x64" ]; then
           make -f win32/Makefile.gcc \
-            BINARY_PATH=${{ github.workspace }}/install/bin \
-            INCLUDE_PATH=${{ github.workspace }}/install/include \
-            LIBRARY_PATH=${{ github.workspace }}/install/lib \
+            BINARY_PATH="${INSTALL_PREFIX}/bin" \
+            INCLUDE_PATH="${INSTALL_PREFIX}/include" \
+            LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
             SHARED_MODE=0 \
             PREFIX=x86_64-w64-mingw32- \
             install
         else
           make -f win32/Makefile.gcc \
-            BINARY_PATH=${{ github.workspace }}/install/bin \
-            INCLUDE_PATH=${{ github.workspace }}/install/include \
-            LIBRARY_PATH=${{ github.workspace }}/install/lib \
+            BINARY_PATH="${INSTALL_PREFIX}/bin" \
+            INCLUDE_PATH="${INSTALL_PREFIX}/include" \
+            LIBRARY_PATH="${INSTALL_PREFIX}/lib" \
             SHARED_MODE=0 \
             PREFIX=i686-w64-mingw32- \
             install
@@ -398,10 +407,14 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build/nghttp2-src
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
         if [ "${{ matrix.arch }}" = "x64" ]; then
           ./configure \
             --host=x86_64-w64-mingw32 \
-            --prefix=${{ github.workspace }}/install \
+            --prefix="${INSTALL_PREFIX}" \
             --enable-static \
             --disable-shared \
             --disable-examples \
@@ -411,7 +424,7 @@ jobs:
         else
           ./configure \
             --host=i686-w64-mingw32 \
-            --prefix=${{ github.workspace }}/install \
+            --prefix="${INSTALL_PREFIX}" \
             --enable-static \
             --disable-shared \
             --disable-examples \
@@ -435,14 +448,18 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/build/curl-src
-        export PKG_CONFIG_PATH="${{ github.workspace }}/install/lib/pkgconfig:$PKG_CONFIG_PATH"
-        export LDFLAGS="-L${{ github.workspace }}/install/lib -static-libgcc -static-libstdc++ $LDFLAGS"
-        export CPPFLAGS="-I${{ github.workspace }}/install/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 $CPPFLAGS"
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
+        export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LDFLAGS="-L${INSTALL_PREFIX}/lib -static-libgcc -static-libstdc++ $LDFLAGS"
+        export CPPFLAGS="-I${INSTALL_PREFIX}/include -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0601 $CPPFLAGS"
         
         if [ "${{ matrix.arch }}" = "x64" ]; then
           ./configure \
             --host=x86_64-w64-mingw32 \
-            --prefix=${{ github.workspace }}/install \
+            --prefix="${INSTALL_PREFIX}" \
             --enable-static \
             --disable-shared \
             --with-openssl \
@@ -474,7 +491,7 @@ jobs:
         else
           ./configure \
             --host=i686-w64-mingw32 \
-            --prefix=${{ github.workspace }}/install \
+            --prefix="${INSTALL_PREFIX}" \
             --enable-static \
             --disable-shared \
             --with-openssl \
@@ -512,6 +529,10 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}
+        
+        # Convert Windows paths to MSYS2 format
+        INSTALL_PREFIX=$(cygpath -u "${{ github.workspace }}")/install
+        
         cat > test.c << 'EOF'
         #include <curl/curl.h>
         #include <stdio.h>
@@ -535,8 +556,8 @@ jobs:
         EOF
         
         x86_64-w64-mingw32-gcc test.c -o test.exe \
-          -I${{ github.workspace }}/install/include \
-          -L${{ github.workspace }}/install/lib \
+          -I"${INSTALL_PREFIX}/include" \
+          -L"${INSTALL_PREFIX}/lib" \
           -lcurl -lssl -lcrypto -lnghttp2 -lz \
           -lws2_32 -lwldap32 -lcrypt32 -lnormaliz -lversion \
           -static-libgcc -static-libstdc++ -static
@@ -547,6 +568,7 @@ jobs:
       shell: msys2 {0}
       run: |
         cd ${{ github.workspace }}/install
+        
         # Create a Win7-compatible package
         mkdir -p libcurl-win7-${{ matrix.arch }}
         cp -r include lib bin libcurl-win7-${{ matrix.arch }}/
